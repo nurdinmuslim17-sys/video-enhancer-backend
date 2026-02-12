@@ -15,10 +15,11 @@ app.use(cors());
 app.use(express.json());
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+// buat folder upload & output otomatis
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 if (!fs.existsSync("outputs")) fs.mkdirSync("outputs");
 
-/* ================= MONGODB CONNECT ================= */
+/* ================= MONGODB ================= */
 mongoose.connect(process.env.MONGO_URI)
 .then(()=>console.log("MongoDB Connected ✅"))
 .catch(err=>console.log(err));
@@ -90,7 +91,6 @@ const resetLimit = async(user)=>{
 const upload = multer({dest:"uploads/"});
 app.post("/process", auth, upload.single("video"), async(req,res)=>{
   const user=req.user;
-  // cek subscription expire
   if(user.subscriptionExpire && new Date()>user.subscriptionExpire){
     user.role="free";
     await user.save();
@@ -108,6 +108,54 @@ app.post("/process", auth, upload.single("video"), async(req,res)=>{
     .save(output)
     .on("end", async()=>{
       user.usedToday+=1;
+      await user.save();
+      res.download(output);
+    })
+    .on("error", (err)=>{console.log(err); res.status(500).json({message:"Processing error"}); });
+});
+
+/* ================= MIDTRANS PAYMENT ================= */
+let snap = new midtransClient.Snap({
+  isProduction:false,
+  serverKey:process.env.MIDTRANS_SERVER_KEY
+});
+
+app.post("/create-payment", auth, async(req,res)=>{
+  const parameter={
+    transaction_details:{
+      order_id:"ORDER-"+Date.now(),
+      gross_amount:49000
+    }
+  };
+  const transaction = await snap.createTransaction(parameter);
+  res.json({token:transaction.token});
+});
+
+/* ================= WITHDRAW REFERRAL ================= */
+app.post("/withdraw-referral", auth, async(req,res)=>{
+  const user=req.user;
+  if(user.referralBonus<=0) return res.json({message:"Tidak ada saldo untuk withdraw"});
+  const amount=user.referralBonus;
+  user.referralBonus=0;
+  await user.save();
+  res.json({message:"Berhasil withdraw Rp "+amount});
+});
+
+/* ================= GET USER INFO ================= */
+app.get("/me", auth, async(req,res)=>{
+  const user=req.user;
+  res.json({referralBonus:user.referralBonus,role:user.role,email:user.email});
+});
+
+/* ================= ADMIN STATS ================= */
+app.get("/admin/stats", async(req,res)=>{
+  const totalUsers = await User.countDocuments();
+  const totalPro = await User.countDocuments({role:"pro"});
+  const totalRevenue = totalPro*49000;
+  res.json({totalUsers,totalPro,totalRevenue});
+});
+
+app.listen(5000, ()=>console.log("Backend running ✅"));      user.usedToday+=1;
       await user.save();
       res.download(output);
     })
